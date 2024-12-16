@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Box, TextField, Button, Typography } from '@mui/material';
 
 const BulletinBoard: React.FC = () => {
   const [boardName, setBoardName] = useState('');
@@ -13,22 +14,39 @@ const BulletinBoard: React.FC = () => {
   };
 
   return (
-    <div className="bulletin-board">
-      <h1>Bulletin Boards</h1>
-      <input
-        type="text"
-        placeholder="Enter board name"
+    <Box
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 2,
+        maxWidth: '400px',
+        width: '100%',
+        padding: 2,
+      }}
+    >
+      <Typography variant="h4" component="h1" gutterBottom>
+        BulletinHub
+      </Typography>
+      <TextField
+        label="Enter board name"
+        variant="outlined"
         value={boardName}
         onChange={(e) => setBoardName(e.target.value)}
       />
-      <input
-        type="text"
-        placeholder="Enter username"
+      <TextField
+        label="Enter username"
+        variant="outlined"
         value={username}
         onChange={(e) => setUsername(e.target.value)}
       />
-      <button onClick={handleJoinBoard}>Join Board</button>
-    </div>
+      <Button
+        variant="contained"
+        color="primary"
+        onClick={handleJoinBoard}
+      >
+        Join Board
+      </Button>
+    </Box>
   );
 };
 

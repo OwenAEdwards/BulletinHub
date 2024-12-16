@@ -1,6 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useLocation, useParams } from 'react-router-dom';
 import UserList from './UserList';
+import {
+  Box,
+  Typography,
+  TextField,
+  Button,
+  Paper,
+  List,
+  ListItem,
+  ListItemText,
+} from '@mui/material';
 
 const ChatRoom: React.FC = () => {
   const { boardName } = useParams<{ boardName: string }>();
@@ -14,7 +24,7 @@ const ChatRoom: React.FC = () => {
 
   useEffect(() => {
     if (!boardName || !username) {
-      console.error("Board name is missing");
+      console.error('Board name or username is missing');
       return;
     }
 
@@ -79,26 +89,63 @@ const ChatRoom: React.FC = () => {
   };
 
   return (
-    <div className="chat-room">
-      <h1>Chat Room: {boardName}</h1>
-      <div className="chat-messages">
-        {messages.map((msg, index) => (
-          <div key={index} className="message">
-            {msg}
-          </div>
-        ))}
-      </div>
-      <div className="message-input">
-        <input
-          type="text"
+    <Box
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        height: '100vh',
+        bgcolor: '#f5f5f5',
+        padding: 2,
+      }}
+    >
+      <Typography variant="h4" component="h1" gutterBottom>
+        Chat Room: {boardName}
+      </Typography>
+      <Paper
+        elevation={3}
+        sx={{
+          width: '100%',
+          maxWidth: 600,
+          height: 400,
+          overflowY: 'auto',
+          mb: 2,
+          p: 2,
+          bgcolor: '#ffffff',
+        }}
+      >
+        <List>
+          {messages.map((msg, index) => (
+            <ListItem key={index}>
+              <ListItemText primary={msg} />
+            </ListItem>
+          ))}
+        </List>
+      </Paper>
+      <Box
+        sx={{
+          display: 'flex',
+          width: '100%',
+          maxWidth: 600,
+          alignItems: 'center',
+          gap: 1,
+        }}
+      >
+        <TextField
+          fullWidth
+          variant="outlined"
           placeholder="Type a message..."
           value={newMessage}
           onChange={(e) => setNewMessage(e.target.value)}
+          sx={{ flexGrow: 1 }}
         />
-        <button onClick={sendMessage}>Send</button>
-      </div>
+        <Button variant="contained" color="primary" onClick={sendMessage}>
+          Send
+        </Button>
+      </Box>
       <UserList boardName={boardName || ''} />
-    </div>
+    </Box>
   );
 };
 

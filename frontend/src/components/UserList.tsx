@@ -1,4 +1,13 @@
 import React, { useState, useEffect } from 'react';
+import {
+  Box,
+  Typography,
+  List,
+  ListItem,
+  ListItemText,
+  CircularProgress,
+  Alert,
+} from '@mui/material';
 
 interface UserListProps {
   boardName: string;
@@ -32,26 +41,56 @@ const UserList: React.FC<UserListProps> = ({ boardName }) => {
   }, [boardName]);
 
   if (loading) {
-    return <div>Loading users...</div>;
+    return (
+      <Box
+        sx={{
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          height: '100px',
+        }}
+      >
+        <CircularProgress />
+      </Box>
+    );
   }
 
   if (error) {
-    return <div>{error}</div>;
+    return (
+      <Box sx={{ mt: 2 }}>
+        <Alert severity="error">{error}</Alert>
+      </Box>
+    );
   }
 
   return (
-    <div className="user-list">
-      <h2>Users in {boardName}</h2>
+    <Box
+      sx={{
+        mt: 3,
+        p: 2,
+        bgcolor: '#ffffff',
+        border: '1px solid #ddd',
+        borderRadius: '8px',
+        boxShadow: '0px 2px 4px rgba(0, 0, 0, 0.1)',
+      }}
+    >
+      <Typography variant="h6" gutterBottom>
+        Users in <strong>{boardName}</strong>
+      </Typography>
       {users.length === 0 ? (
-        <p>No users currently in this board.</p>
+        <Typography variant="body1" color="textSecondary">
+          No users currently in this board.
+        </Typography>
       ) : (
-        <ul>
+        <List>
           {users.map((user, index) => (
-            <li key={index}>{user}</li>
+            <ListItem key={index} sx={{ pl: 0 }}>
+              <ListItemText primary={user} />
+            </ListItem>
           ))}
-        </ul>
+        </List>
       )}
-    </div>
+    </Box>
   );
 };
 
