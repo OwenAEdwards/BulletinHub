@@ -1,4 +1,4 @@
-# Bulletin-Board
+# BulletinHub
 
 ## Instructions
 
