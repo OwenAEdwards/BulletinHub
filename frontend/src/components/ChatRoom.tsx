@@ -76,7 +76,8 @@ const ChatRoom: React.FC = () => {
     };
   }, [boardName, username]);
 
-  const sendMessage = () => {
+  const sendMessage = (e?: React.FormEvent) => {
+    if (e) e.preventDefault(); // Prevent default form submission behavior
     if (!newMessage.trim()) return;
     if (socket.current) {
       console.log('Sending message:', newMessage);
@@ -124,6 +125,8 @@ const ChatRoom: React.FC = () => {
         </List>
       </Paper>
       <Box
+        component="form"
+        onSubmit={sendMessage}
         sx={{
           display: 'flex',
           width: '100%',
@@ -140,7 +143,7 @@ const ChatRoom: React.FC = () => {
           onChange={(e) => setNewMessage(e.target.value)}
           sx={{ flexGrow: 1 }}
         />
-        <Button variant="contained" color="primary" onClick={sendMessage}>
+        <Button type="submit" variant="contained" color="primary">
           Send
         </Button>
       </Box>
