@@ -11,6 +11,7 @@ import (
 type Connection struct {
 	Username string
 	Socket   *websocket.Conn // WebSocket type
+	Board    string          // The board the user is currently in
 }
 
 // BulletinBoard manages public and private boards
@@ -48,6 +49,18 @@ func (bb *BulletinBoard) RemoveUser(boardName string, user *Connection) {
 			}
 		}
 	}
+}
+
+// ListBoards returns a list of all available board names
+func (bb *BulletinBoard) ListBoards() []string {
+	bb.mutex.Lock()
+	defer bb.mutex.Unlock()
+
+	var boardNames []string
+	for boardName := range bb.Boards {
+		boardNames = append(boardNames, boardName)
+	}
+	return boardNames
 }
 
 // ListUsers returns a list of usernames in a specific board

@@ -1,11 +1,12 @@
 package handlers
 
 import (
+	"bulletin_board/bulletin"
 	"bulletin_board/utils"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
-	"sync"
 
 	"github.com/gorilla/websocket"
 )
@@ -13,71 +14,87 @@ import (
 // Upgrader to upgrade HTTP to WebSocket
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
-		return true // Allow all origins for testing
+		origin := r.Header.Get("Origin")
+		fmt.Println("WebSocket Origin:", origin) // Log the origin
+		return origin == "http://localhost:3000" || origin == "http://localhost:5173"
 	},
 }
 
-// Connection struct to track user state
-type Connection struct {
-	Username string
-	Board    string
-	Socket   *websocket.Conn
-}
-
-// Global server state
-var (
-	clients        = make(map[*Connection]bool)     // Active connections
-	bulletinBoards = make(map[string][]*Connection) // Public and private boards
-	mutex          sync.Mutex                       // Mutex for safe concurrency
-)
+// Global state - reference to the BulletinBoard instance
+var bulletinBoard = bulletin.NewBulletinBoard()
 
 // HandleWebSocket manages WebSocket connections
 func HandleWebSocket(w http.ResponseWriter, r *http.Request) {
+	// Log WebSocket connection request details
+	fmt.Println("Upgrading HTTP connection to WebSocket")
+	fmt.Println("Request Method:", r.Method)
+	fmt.Println("Request URL:", r.URL.Path)
+	fmt.Println("Request Origin:", r.Header.Get("Origin"))
+
+	// Set CORS headers explicitly here
+	w.Header().Set("Access-Control-Allow-Origin", "http://localhost:5173")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		fmt.Println("Error upgrading to WebSocket:", err)
+		fmt.Printf("Error upgrading to WebSocket: %v, Request Method: %s, Request URL: %s\n", err, r.Method, r.URL.Path)
+		http.Error(w, "Could not open WebSocket connection", http.StatusBadRequest)
 		return
 	}
+	fmt.Println("WebSocket connection established with", r.RemoteAddr)
 	defer conn.Close()
 
 	// Prompt client for a username
 	conn.WriteMessage(websocket.TextMessage, []byte("Enter your username:"))
 	_, username, err := conn.ReadMessage()
 	if err != nil {
+		fmt.Printf("Error reading username from %s: %v\n", r.RemoteAddr, err)
 		return
 	}
-	client := &Connection{Username: string(username), Socket: conn}
 
-	mutex.Lock()
-	clients[client] = true
-	bulletinBoards["public"] = append(bulletinBoards["public"], client) // Join public board by default
-	mutex.Unlock()
+	// Ensure the username is not empty
+	usernameStr := string(username)
+	if usernameStr == "" {
+		conn.WriteMessage(websocket.TextMessage, []byte("Username cannot be empty. Please provide a valid username."))
+		return
+	}
 
-	fmt.Println("User connected:", client.Username)
-	broadcastMessage(fmt.Sprintf("%s joined the chat", client.Username), "public")
+	// Create the connection object for the user
+	client := &bulletin.Connection{Username: usernameStr, Socket: conn, Board: "public"}
+
+	// Add client to the 'public' board by default
+	bulletinBoard.AddUser("public", client)
+	fmt.Printf("User %s connected to chat room\n", client.Username)
+
+	// Broadcast the user's join message to the public board
+	bulletinBoard.BroadcastMessage("public", fmt.Sprintf("%s joined the chat", client.Username))
 
 	for {
 		// Listen for messages
 		messageType, msg, err := conn.ReadMessage()
 		if err != nil {
-			removeClient(client)
+			fmt.Printf("Error reading message from %s: %v\n", client.Username, err)
+			bulletinBoard.RemoveUser("public", client)
+			bulletinBoard.BroadcastMessage("public", fmt.Sprintf("%s left the chat", client.Username))
 			return
 		}
+		fmt.Printf("Received message from %s: %s\n", client.Username, msg)
 
 		// Handle commands (join, leave, etc.)
 		handleClientMessage(client, string(msg))
 
-		// Broadcast new messages
+		// Broadcast new messages (not a command)
 		if messageType == websocket.TextMessage {
 			timestamp := utils.GetTimestamp()
 			fullMessage := fmt.Sprintf("[%s] %s: %s", timestamp, client.Username, msg)
-			broadcastMessage(fullMessage, client.Board)
+			bulletinBoard.BroadcastMessage(client.Board, fullMessage)
 		}
 	}
 }
 
 // Handle messages and commands from clients
-func handleClientMessage(client *Connection, message string) {
+func handleClientMessage(client *bulletin.Connection, message string) {
 	// Check if the message is a command
 	if len(message) > 0 && message[0] == '/' {
 		// Split the command and arguments
@@ -87,6 +104,8 @@ func handleClientMessage(client *Connection, message string) {
 		if len(parts) > 1 {
 			arg = parts[1]
 		}
+
+		fmt.Printf("Processing command '%s' from %s\n", command, client.Username)
 
 		switch command {
 		case "/join":
@@ -111,85 +130,72 @@ func handleClientMessage(client *Connection, message string) {
 		}
 	} else {
 		// If not a command, treat it as a message and broadcast
-		broadcastMessage(fmt.Sprintf("%s: %s", client.Username, message), client.Board)
+		bulletinBoard.BroadcastMessage(client.Board, fmt.Sprintf("%s: %s", client.Username, message))
 	}
 }
 
-// Broadcast a message to all clients in a specific board
-func broadcastMessage(message, board string) {
-	mutex.Lock()
-	defer mutex.Unlock()
-
-	if _, exists := bulletinBoards[board]; exists {
-		for _, conn := range bulletinBoards[board] {
-			err := conn.Socket.WriteMessage(websocket.TextMessage, []byte(message))
-			if err != nil {
-				fmt.Println("Error broadcasting message:", err)
-			}
-		}
-	}
-}
-
-// Remove a client from all boards and close connection
-func removeClient(client *Connection) {
-	mutex.Lock()
-	defer mutex.Unlock()
-
-	for board, connections := range bulletinBoards {
-		for i, conn := range connections {
-			if conn == client {
-				bulletinBoards[board] = append(connections[:i], connections[i+1:]...)
-			}
-		}
-	}
-	delete(clients, client)
-	fmt.Printf("User %s disconnected\n", client.Username)
-}
-
-func joinBoard(client *Connection, boardName string) {
-	mutex.Lock()
-	defer mutex.Unlock()
-
-	// Leave the current board if any
-	leaveBoard(client, client.Board)
+// Join a new board
+func joinBoard(client *bulletin.Connection, boardName string) {
+	// Remove user from their current board (if any)
+	bulletinBoard.RemoveUser(client.Board, client)
 
 	// Add client to the new board
-	bulletinBoards[boardName] = append(bulletinBoards[boardName], client)
 	client.Board = boardName
+	bulletinBoard.AddUser(boardName, client)
 	client.Socket.WriteMessage(websocket.TextMessage, []byte("Joined board: "+boardName))
-	broadcastMessage(client.Username+" joined the board", boardName)
+
+	// Broadcast join message to the new board
+	bulletinBoard.BroadcastMessage(boardName, client.Username+" joined the board")
+	fmt.Printf("User %s joining board: %s\n", client.Username, boardName)
 }
 
-func leaveBoard(client *Connection, boardName string) {
-	mutex.Lock()
-	defer mutex.Unlock()
-
+// Leave the current board
+func leaveBoard(client *bulletin.Connection, boardName string) {
 	if boardName == "" {
+		client.Socket.WriteMessage(websocket.TextMessage, []byte("You are not in any board"))
 		return
 	}
 
-	if connections, exists := bulletinBoards[boardName]; exists {
-		for i, conn := range connections {
-			if conn == client {
-				// Remove client from the board
-				bulletinBoards[boardName] = append(connections[:i], connections[i+1:]...)
-				break
-			}
-		}
-		client.Socket.WriteMessage(websocket.TextMessage, []byte("Left board: "+boardName))
-		broadcastMessage(client.Username+" left the board", boardName)
-	}
+	// Remove client from the board
+	bulletinBoard.RemoveUser(boardName, client)
 	client.Board = ""
+	client.Socket.WriteMessage(websocket.TextMessage, []byte("Left board: "+boardName))
+
+	// Broadcast leave message to the board
+	bulletinBoard.BroadcastMessage(boardName, client.Username+" left the board")
+	fmt.Printf("User %s leaving board: %s\n", client.Username, boardName)
 }
 
-func listBoards(client *Connection) {
-	mutex.Lock()
-	defer mutex.Unlock()
+// List all available boards
+func listBoards(client *bulletin.Connection) {
+	boards := bulletinBoard.ListBoards()
+	logMessage := "Available boards: " + strings.Join(boards, ", ")
+	client.Socket.WriteMessage(websocket.TextMessage, []byte("Available boards: "+strings.Join(boards, ", ")))
 
-	var boards []string
-	for board := range bulletinBoards {
-		boards = append(boards, board)
+	// Log the boards being returned
+	fmt.Printf("User %s requested available boards: %s\n", client.Username, logMessage)
+}
+
+// GetBoardUsers handles requests to fetch the list of users in a specific board
+func GetBoardUsers(w http.ResponseWriter, r *http.Request) {
+	// Extract boardName from the request URL
+	boardName := strings.TrimPrefix(r.URL.Path, "/boards/")
+	boardName = strings.TrimSuffix(boardName, "/users")
+
+	// Log the board name being requested
+	fmt.Printf("Request to get users for board: %s\n", boardName)
+
+	users := bulletinBoard.ListUsers(boardName)
+	if users == nil {
+		users = []string{} // Return an empty array if no users
 	}
 
-	client.Socket.WriteMessage(websocket.TextMessage, []byte("Available boards: "+strings.Join(boards, ", ")))
+	// Log the users in the board
+	fmt.Printf("Users in board %s: %v\n", boardName, users)
+
+	// Return the user list as JSON
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(users); err != nil {
+		http.Error(w, "Failed to encode user list", http.StatusInternalServerError)
+	}
 }
