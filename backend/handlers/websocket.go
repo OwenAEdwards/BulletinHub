@@ -45,51 +45,69 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("WebSocket connection established with", r.RemoteAddr)
 	defer conn.Close()
 
-	// Prompt client for a username
-	conn.WriteMessage(websocket.TextMessage, []byte("Enter your username:"))
-	_, username, err := conn.ReadMessage()
+	// Step 1: Wait for the username
+	_, usernameMsg, err := conn.ReadMessage()
 	if err != nil {
-		fmt.Printf("Error reading username from %s: %v\n", r.RemoteAddr, err)
+		fmt.Printf("Error reading username: %v\n", err)
+		return
+	}
+	username := strings.TrimSpace(string(usernameMsg))
+	if username == "" {
+		conn.WriteMessage(websocket.TextMessage, []byte("Username cannot be empty"))
+		return
+	}
+	fmt.Printf("Received username: %s\n", username)
+
+	// Step 2: Wait for the join command
+	_, joinMsg, err := conn.ReadMessage()
+	if err != nil {
+		fmt.Printf("Error reading join command: %v\n", err)
+		return
+	}
+	joinCommand := strings.TrimSpace(string(joinMsg))
+	if !strings.HasPrefix(joinCommand, "/join ") {
+		conn.WriteMessage(websocket.TextMessage, []byte("Invalid join command. Use '/join <boardName>'"))
 		return
 	}
 
-	// Ensure the username is not empty
-	usernameStr := string(username)
-	if usernameStr == "" {
-		conn.WriteMessage(websocket.TextMessage, []byte("Username cannot be empty. Please provide a valid username."))
+	// Extract board name
+	boardName := strings.TrimSpace(strings.TrimPrefix(joinCommand, "/join "))
+	if boardName == "" {
+		conn.WriteMessage(websocket.TextMessage, []byte("Board name cannot be empty"))
 		return
 	}
+	timestamp := utils.GetTimestamp()
+	fmt.Printf("[%s] User %s joining board: %s\n", timestamp, username, boardName)
 
 	// Create the connection object for the user
-	client := &bulletin.Connection{Username: usernameStr, Socket: conn, Board: "public"}
+	client := &bulletin.Connection{Username: username, Socket: conn, Board: boardName}
 
-	// Add client to the 'public' board by default
-	bulletinBoard.AddUser("public", client)
-	fmt.Printf("User %s connected to chat room\n", client.Username)
+	// Add client to the specified board
+	bulletinBoard.AddUser(boardName, client)
+	fmt.Printf("[%s] User %s connected to board: %s\n", timestamp, client.Username, boardName)
 
-	// Broadcast the user's join message to the public board
-	bulletinBoard.BroadcastMessage("public", fmt.Sprintf("%s joined the chat", client.Username))
+	// Broadcast the user's join message
+	joinMessage := fmt.Sprintf("[%s] %s joined the board", timestamp, client.Username)
+	bulletinBoard.BroadcastMessage(boardName, joinMessage)
 
 	for {
 		// Listen for messages
-		messageType, msg, err := conn.ReadMessage()
+		_, msg, err := conn.ReadMessage()
+		timestamp := utils.GetTimestamp() // Obtain a fresh timestamp
 		if err != nil {
-			fmt.Printf("Error reading message from %s: %v\n", client.Username, err)
-			bulletinBoard.RemoveUser("public", client)
-			bulletinBoard.BroadcastMessage("public", fmt.Sprintf("%s left the chat", client.Username))
+			fmt.Printf("[%s] Error reading message from %s: %v\n", timestamp, client.Username, err)
+
+			// Broadcast the leave message with the current timestamp
+			leaveMessage := fmt.Sprintf("[%s] %s left the chat", utils.GetTimestamp(), client.Username)
+			bulletinBoard.RemoveUser(client.Board, client)
+			bulletinBoard.BroadcastMessage(client.Board, leaveMessage)
 			return
 		}
-		fmt.Printf("Received message from %s: %s\n", client.Username, msg)
+		// Log the received message
+		fmt.Printf("[%s] Received message from %s: %s\n", timestamp, client.Username, msg)
 
 		// Handle commands (join, leave, etc.)
 		handleClientMessage(client, string(msg))
-
-		// Broadcast new messages (not a command)
-		if messageType == websocket.TextMessage {
-			timestamp := utils.GetTimestamp()
-			fullMessage := fmt.Sprintf("[%s] %s: %s", timestamp, client.Username, msg)
-			bulletinBoard.BroadcastMessage(client.Board, fullMessage)
-		}
 	}
 }
 
@@ -129,8 +147,14 @@ func handleClientMessage(client *bulletin.Connection, message string) {
 			client.Socket.WriteMessage(websocket.TextMessage, []byte("Unknown command: "+command))
 		}
 	} else {
-		// If not a command, treat it as a message and broadcast
-		bulletinBoard.BroadcastMessage(client.Board, fmt.Sprintf("%s: %s", client.Username, message))
+		// If message not a command, then it's a regular message
+
+		// Create the message with a timestamp
+		timestamp := utils.GetTimestamp()
+		fullMessage := fmt.Sprintf("[%s] %s: %s", timestamp, client.Username, message)
+
+		// Broadcast the message to others
+		bulletinBoard.BroadcastMessage(client.Board, fullMessage)
 	}
 }
 
@@ -142,11 +166,20 @@ func joinBoard(client *bulletin.Connection, boardName string) {
 	// Add client to the new board
 	client.Board = boardName
 	bulletinBoard.AddUser(boardName, client)
-	client.Socket.WriteMessage(websocket.TextMessage, []byte("Joined board: "+boardName))
 
-	// Broadcast join message to the new board
-	bulletinBoard.BroadcastMessage(boardName, client.Username+" joined the board")
-	fmt.Printf("User %s joining board: %s\n", client.Username, boardName)
+	// Get the current timestamp
+	timestamp := utils.GetTimestamp()
+
+	// Send a confirmation message to the client
+	joinedMessage := fmt.Sprintf("[%s] Joined board: %s", timestamp, boardName)
+	client.Socket.WriteMessage(websocket.TextMessage, []byte(joinedMessage))
+
+	// Broadcast the join message to other users on the new board
+	broadcastMessage := fmt.Sprintf("[%s] %s joined the board", timestamp, client.Username)
+	bulletinBoard.BroadcastMessage(boardName, broadcastMessage)
+
+	// Log the join event on the server
+	fmt.Printf("[%s] User %s joining board: %s\n", timestamp, client.Username, boardName)
 }
 
 // Leave the current board
@@ -159,31 +192,48 @@ func leaveBoard(client *bulletin.Connection, boardName string) {
 	// Remove client from the board
 	bulletinBoard.RemoveUser(boardName, client)
 	client.Board = ""
-	client.Socket.WriteMessage(websocket.TextMessage, []byte("Left board: "+boardName))
+
+	// Get the current timestamp
+	timestamp := utils.GetTimestamp()
+
+	// Notify the client they've left the board
+	client.Socket.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("[%s] Left board: %s", timestamp, boardName)))
 
 	// Broadcast leave message to the board
-	bulletinBoard.BroadcastMessage(boardName, client.Username+" left the board")
-	fmt.Printf("User %s leaving board: %s\n", client.Username, boardName)
+	leaveMessage := fmt.Sprintf("[%s] %s left the board", timestamp, client.Username)
+	bulletinBoard.BroadcastMessage(boardName, leaveMessage)
+
+	// Log the leave event with a timestamp
+	fmt.Printf("[%s] User %s leaving board: %s\n", timestamp, client.Username, boardName)
 }
 
 // List all available boards
 func listBoards(client *bulletin.Connection) {
-	boards := bulletinBoard.ListBoards()
-	logMessage := "Available boards: " + strings.Join(boards, ", ")
-	client.Socket.WriteMessage(websocket.TextMessage, []byte("Available boards: "+strings.Join(boards, ", ")))
+	// Get the current timestamp
+	timestamp := utils.GetTimestamp()
 
-	// Log the boards being returned
-	fmt.Printf("User %s requested available boards: %s\n", client.Username, logMessage)
+	// Retrieve the list of boards
+	boards := bulletinBoard.ListBoards()
+	boardsList := strings.Join(boards, ", ")
+
+	// Send the available boards list to the client with a timestamp
+	client.Socket.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("[%s] Available boards: %s", timestamp, boardsList)))
+
+	// Log the request with the timestamp
+	fmt.Printf("[%s] User %s requested available boards: %s\n", timestamp, client.Username, boardsList)
 }
 
 // GetBoardUsers handles requests to fetch the list of users in a specific board
 func GetBoardUsers(w http.ResponseWriter, r *http.Request) {
+	// Get the current timestamp
+	timestamp := utils.GetTimestamp()
+
 	// Extract boardName from the request URL
 	boardName := strings.TrimPrefix(r.URL.Path, "/boards/")
 	boardName = strings.TrimSuffix(boardName, "/users")
 
 	// Log the board name being requested
-	fmt.Printf("Request to get users for board: %s\n", boardName)
+	fmt.Printf("[%s] Request to get users for board: %s\n", timestamp, boardName)
 
 	users := bulletinBoard.ListUsers(boardName)
 	if users == nil {
@@ -191,11 +241,12 @@ func GetBoardUsers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Log the users in the board
-	fmt.Printf("Users in board %s: %v\n", boardName, users)
+	fmt.Printf("[%s] Users in board %s: %v\n", timestamp, boardName, users)
 
 	// Return the user list as JSON
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(users); err != nil {
 		http.Error(w, "Failed to encode user list", http.StatusInternalServerError)
+		fmt.Printf("[%s] Error encoding user list for board %s: %v\n", timestamp, boardName, err)
 	}
 }
