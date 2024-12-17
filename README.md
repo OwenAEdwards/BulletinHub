@@ -8,6 +8,8 @@ Open the terminal on the root and navigate to the `backend/` directory:
 cd backend/
 ```
 
+If you do not already have Golang installed, you can download it here: https://go.dev/doc/install
+
 Install dependencies for Golang with the following command:
 ```bash
 go mod tidy
@@ -23,6 +25,8 @@ Open the terminal on the root and navigate to the `frontend/` directory:
 ```bash
 cd frontend/
 ```
+
+If you do not already have npm installed, you can download it here: https://nodejs.org/en/download/package-manager
 
 Ensure all dependencies are installed using `npm`:
 ```bash
