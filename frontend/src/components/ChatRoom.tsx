@@ -19,6 +19,9 @@ const ChatRoom: React.FC = () => {
   const [newMessage, setNewMessage] = useState('');
   const socket = useRef<WebSocket | null>(null);
 
+  // Track whether the username and join message have been sent
+  const messagesSentRef = useRef(false);
+
   // Get the username from the router state
   const username = location.state?.username;
 
@@ -34,15 +37,38 @@ const ChatRoom: React.FC = () => {
 
     socket.current.onopen = () => {
       console.log('WebSocket connection established');
+    
+      let retryCount = 0;
+      const maxRetries = 10;
 
-      // Send the username and join message to the server
-      if (boardName) {
-        const joinMessage = `/join ${boardName}`;
-        console.log(`Sending username: ${username}`);
-        socket.current?.send(username);
-        console.log(`Sending message to join board: ${joinMessage}`);
-        socket.current?.send(joinMessage);
-      }
+      const sendMessageWithRetry = () => {
+        // Wait until WebSocket is in OPEN state
+        if (socket.current?.readyState === WebSocket.OPEN) {
+          // Check if message has already been sent
+          if (!messagesSentRef.current) {
+            // Send the username to the server
+            console.log(`Sending username: ${username}`);
+            socket.current.send(username);
+      
+            // Send the join message to the server
+            const joinMessage = `/join ${boardName}`;
+            console.log(`Sending message to join board: ${joinMessage}`);
+            socket.current.send(joinMessage);
+
+            // Mark messages as sent
+            messagesSentRef.current = true;
+          }
+        } else if (retryCount < maxRetries) {
+          console.warn(`WebSocket not ready. Retrying in 100ms... (${retryCount + 1}/${maxRetries})`);
+          retryCount++;
+          setTimeout(sendMessageWithRetry, 100); // Retry after 100ms
+        } else {
+          console.error('WebSocket failed to become ready after multiple retries.');
+        }
+      };
+    
+      // Start the retry logic
+      sendMessageWithRetry();
     };
 
     socket.current.onmessage = (event) => {
@@ -68,8 +94,9 @@ const ChatRoom: React.FC = () => {
       }
     };
 
+    // Cleanup function
     return () => {
-      if (socket.current) {
+      if (socket.current && socket.current.readyState === WebSocket.OPEN) {
         console.log('Closing WebSocket connection');
         socket.current.close();
       }
