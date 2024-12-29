@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"  # Frontend port
+      - "8080:8080"  # Backend port
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
