@@ -3,8 +3,8 @@ package handlers
 import (
 	"bulletin_board/bulletin"
 	"bulletin_board/utils"
-	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 
@@ -90,6 +90,7 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	joinMessage := fmt.Sprintf("[%s] %s joined the board", timestamp, client.Username)
 	bulletinBoard.BroadcastMessage(boardName, joinMessage)
 
+	// Step 3: Handle incoming messages
 	for {
 		// Listen for messages
 		_, msg, err := conn.ReadMessage()
@@ -128,20 +129,26 @@ func handleClientMessage(client *bulletin.Connection, message string) {
 		switch command {
 		case "/join":
 			if arg == "" {
+				// Create a timestamp
+				timestamp := utils.GetTimestamp()
+
+				// Log that a user tried to join a board without specifying a board name to the server
+				fmt.Printf("[%s] User %s attempted to join a board without specifying a board name.\n", timestamp, client.Username)
+
+				// Inform the client that their attempt to join a board failed
 				client.Socket.WriteMessage(websocket.TextMessage, []byte("Usage: /join <board_name>"))
 				return
 			}
 			joinBoard(client, arg)
 
 		case "/leave":
-			if arg == "" {
-				client.Socket.WriteMessage(websocket.TextMessage, []byte("Usage: /leave <board_name>"))
-				return
-			}
-			leaveBoard(client, arg)
+			leaveBoard(client, client.Board)
 
 		case "/list":
 			listBoards(client)
+
+		case "/users":
+			listUsers(client)
 
 		default:
 			client.Socket.WriteMessage(websocket.TextMessage, []byte("Unknown command: "+command))
@@ -160,8 +167,24 @@ func handleClientMessage(client *bulletin.Connection, message string) {
 
 // Join a new board
 func joinBoard(client *bulletin.Connection, boardName string) {
+	// Check if the client is already in the requested board
+	if client.Board == boardName {
+		// Get the current timestamp
+		timestamp := utils.GetTimestamp()
+
+		// If already in the board, inform the client and log the event
+		alreadyJoinedMessage := fmt.Sprintf("[%s] You are already in the board: %s", timestamp, boardName)
+		client.Socket.WriteMessage(websocket.TextMessage, []byte(alreadyJoinedMessage))
+
+		// Log that the user attempted to join a board they're already in
+		fmt.Printf("[%s] User %s tried to join board: %s, but they are already in it.\n", timestamp, client.Username, boardName)
+		return
+	}
+
 	// Remove user from their current board (if any)
-	bulletinBoard.RemoveUser(client.Board, client)
+	if client.Board != "" {
+		leaveBoard(client, client.Board)
+	}
 
 	// Add client to the new board
 	client.Board = boardName
@@ -176,7 +199,7 @@ func joinBoard(client *bulletin.Connection, boardName string) {
 
 	// Broadcast the join message to other users on the new board
 	broadcastMessage := fmt.Sprintf("[%s] %s joined the board", timestamp, client.Username)
-	bulletinBoard.BroadcastMessage(boardName, broadcastMessage)
+	bulletinBoard.BroadcastMessageExcludingClient(boardName, client, broadcastMessage)
 
 	// Log the join event on the server
 	fmt.Printf("[%s] User %s joining board: %s\n", timestamp, client.Username, boardName)
@@ -184,7 +207,14 @@ func joinBoard(client *bulletin.Connection, boardName string) {
 
 // Leave the current board
 func leaveBoard(client *bulletin.Connection, boardName string) {
-	if boardName == "" {
+	if client.Board == "" {
+		// Create a timestamp
+		timestamp := utils.GetTimestamp()
+
+		// Log that attempted to leave without being in a joined board to the server
+		fmt.Printf("[%s] User %s attempted to leave a board but is not currently in any board.\n", timestamp, client.Username)
+
+		// Inform the client that their attempt to leave a board failed
 		client.Socket.WriteMessage(websocket.TextMessage, []byte("You are not in any board"))
 		return
 	}
@@ -223,30 +253,31 @@ func listBoards(client *bulletin.Connection) {
 	fmt.Printf("[%s] User %s requested available boards: %s\n", timestamp, client.Username, boardsList)
 }
 
-// GetBoardUsers handles requests to fetch the list of users in a specific board
-func GetBoardUsers(w http.ResponseWriter, r *http.Request) {
-	// Get the current timestamp
+// listUsers handles requests to fetch the list of users in a specific board
+func listUsers(client *bulletin.Connection) {
+	// Create timestamp
 	timestamp := utils.GetTimestamp()
 
-	// Extract boardName from the request URL
-	boardName := strings.TrimPrefix(r.URL.Path, "/boards/")
-	boardName = strings.TrimSuffix(boardName, "/users")
+	// Log board validation for /users command
+	if client.Board == "" {
+		log.Printf("[%s] User %s requested user list but is not in any board.\n", timestamp, client.Username)
+		client.Socket.WriteMessage(websocket.TextMessage, []byte("You are not in a board. Join a board first to get user list."))
+		return
+	}
 
-	// Log the board name being requested
-	fmt.Printf("[%s] Request to get users for board: %s\n", timestamp, boardName)
+	// Log the board name and users being fetched
+	log.Printf("[%s] User %s requested user list for board: %s\n", timestamp, client.Username, client.Board)
 
-	users := bulletinBoard.ListUsers(boardName)
+	users := bulletinBoard.ListUsers(client.Board)
 	if users == nil {
 		users = []string{} // Return an empty array if no users
 	}
 
-	// Log the users in the board
-	fmt.Printf("[%s] Users in board %s: %v\n", timestamp, boardName, users)
+	// Log the fetched user list
+	timestamp = utils.GetTimestamp()
+	log.Printf("[%s] Users in board %s: %v\n", timestamp, client.Board, users)
 
-	// Return the user list as JSON
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(users); err != nil {
-		http.Error(w, "Failed to encode user list", http.StatusInternalServerError)
-		fmt.Printf("[%s] Error encoding user list for board %s: %v\n", timestamp, boardName, err)
-	}
+	// Send the user list back to the client
+	userListMessage := fmt.Sprintf("/users:%s", strings.Join(users, ","))
+	client.Socket.WriteMessage(websocket.TextMessage, []byte(userListMessage))
 }

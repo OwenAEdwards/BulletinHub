@@ -15,9 +15,6 @@ func SetupRouter() http.Handler {
 	// WebSocket endpoint
 	router.HandleFunc("/ws", handlers.HandleWebSocket)
 
-	// Route for fetching users of a specific board
-	router.HandleFunc("/boards/", handlers.GetBoardUsers)
-
 	// CORS middleware
 	corsHandler := cors.New(cors.Options{
 		AllowedOrigins: []string{"http://localhost:5173", "http://localhost:3000"},

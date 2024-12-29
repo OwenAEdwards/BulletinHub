@@ -92,3 +92,22 @@ func (bb *BulletinBoard) BroadcastMessage(boardName string, message string) {
 		}
 	}
 }
+
+// BroadcastMessage sends a message to all users in a specific board, excluding the sender
+func (bb *BulletinBoard) BroadcastMessageExcludingClient(boardName string, excludeClient *Connection, message string) {
+	bb.mutex.Lock()
+	defer bb.mutex.Unlock()
+
+	if _, exists := bb.Boards[boardName]; exists {
+		for _, conn := range bb.Boards[boardName] {
+			// Only send the message if the connection is not the one we are excluding
+			if conn != excludeClient {
+				// Send the message to the user's WebSocket
+				err := conn.Socket.WriteMessage(websocket.TextMessage, []byte(message))
+				if err != nil {
+					fmt.Println("Error sending message:", err)
+				}
+			}
+		}
+	}
+}

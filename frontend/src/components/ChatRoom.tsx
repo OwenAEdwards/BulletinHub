@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useLocation, useParams } from 'react-router-dom';
-import UserList from './UserList';
 import {
   Box,
   Typography,
@@ -13,8 +12,9 @@ import {
 } from '@mui/material';
 
 const ChatRoom: React.FC = () => {
-  const { boardName } = useParams<{ boardName: string }>();
+  const { boardName: initialBoardName } = useParams<{ boardName: string }>();
   const location = useLocation();
+  const [boardName, setBoardName] = useState<string>(initialBoardName || ''); // Set initial board name from route param
   const [messages, setMessages] = useState<string[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const socket = useRef<WebSocket | null>(null);
@@ -31,6 +31,8 @@ const ChatRoom: React.FC = () => {
       return;
     }
 
+    // Connect to WebSocket server only if socket is not already connected
+    if (!socket.current) {
     // Connect to WebSocket server
     console.log(`Connecting to WebSocket for board: ${boardName}`);
     socket.current = new WebSocket(`ws://localhost:8080/ws`);
@@ -93,7 +95,7 @@ const ChatRoom: React.FC = () => {
         console.error('Error details:', error);
       }
     };
-
+  }
     // Cleanup function
     return () => {
       if (socket.current && socket.current.readyState === WebSocket.OPEN) {
@@ -101,18 +103,33 @@ const ChatRoom: React.FC = () => {
         socket.current.close();
       }
     };
-  }, [boardName, username]);
+  }, []);
 
+  // Handle sending messages
   const sendMessage = (e?: React.FormEvent) => {
     if (e) e.preventDefault(); // Prevent default form submission behavior
     if (!newMessage.trim()) return;
-    if (socket.current) {
-      console.log('Sending message:', newMessage);
-      socket.current.send(newMessage);
-      setNewMessage('');
-    } else {
-      console.error('WebSocket is not connected');
-      alert('Unable to send message: WebSocket is disconnected');
+
+    if (newMessage.startsWith('/join ')) {
+      // Extract the board name from the /join command
+      const newBoardName = newMessage.split(' ')[1];
+      if (newBoardName) {
+        setBoardName(newBoardName); // Update boardName
+        socket.current?.send(`/join ${newBoardName}`); // Send the /join message to the server
+      }
+    } else if (newMessage === '/leave') {
+      setBoardName(''); // Reset boardName when leaving
+      socket.current?.send('/leave'); // Send the /leave message to the server
+    }
+    else {
+      if (socket.current) {
+        console.log('Sending message:', newMessage);
+        socket.current.send(newMessage);
+        setNewMessage('');
+      } else {
+        console.error('WebSocket is not connected');
+        alert('Unable to send message: WebSocket is disconnected');
+      }
     }
   };
 
@@ -129,7 +146,7 @@ const ChatRoom: React.FC = () => {
       }}
     >
       <Typography variant="h4" component="h1" gutterBottom>
-        Chat Room: {boardName}
+        Chat Room: {boardName || 'No board'}
       </Typography>
       <Paper
         elevation={3}
@@ -174,7 +191,6 @@ const ChatRoom: React.FC = () => {
           Send
         </Button>
       </Box>
-      <UserList boardName={boardName || ''} />
     </Box>
   );
 };
