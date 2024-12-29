@@ -9,7 +9,10 @@ import {
   List,
   ListItem,
   ListItemText,
+  Tooltip,
+  IconButton,
 } from '@mui/material';
+import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 
 const ChatRoom: React.FC = () => {
   const { boardName: initialBoardName } = useParams<{ boardName: string }>();
@@ -187,6 +190,22 @@ const ChatRoom: React.FC = () => {
           onChange={(e) => setNewMessage(e.target.value)}
           sx={{ flexGrow: 1 }}
         />
+        <Tooltip
+          title={
+            <Box>
+              <Typography variant="subtitle2">Special Commands</Typography>
+              <Typography variant="body2">Join a new board: <code>/join &lt;board_name&gt;</code></Typography>
+              <Typography variant="body2">Leave the board: <code>/leave</code></Typography>
+              <Typography variant="body2">List open chatrooms: <code>/list</code></Typography>
+              <Typography variant="body2">List users: <code>/users</code></Typography>
+            </Box>
+          }
+          arrow
+        >
+          <IconButton>
+            <HelpOutlineIcon />
+          </IconButton>
+        </Tooltip>
         <Button type="submit" variant="contained" color="primary">
           Send
         </Button>
