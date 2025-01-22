@@ -1,13 +1,25 @@
-version: '3.8'
-
 services:
   app:
     build: .
     ports:
       - "3000:3000"  # Frontend port
       - "8080:8080"  # Backend port
+    environment:
+      - MONGO_URL=mongodb://mongo:27017/bulletin-board  # MongoDB URL
+    depends_on:
+      - mongo
     networks:
       - app-network
+
+  mongo:
+      image: mongo:latest
+      container_name: mongodb
+      ports:
+        - "27017:27017"  # MongoDB port
+      networks:
+        - app-network
+      #volumes:
+      #  - mongo-data:/data/db  # Persist MongoDB data
 
 networks:
   app-network:

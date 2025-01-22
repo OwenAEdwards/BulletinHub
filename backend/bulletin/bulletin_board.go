@@ -1,53 +1,98 @@
 package bulletin
 
 import (
-	"fmt"
+	"context"
+	"log"
+	"os"
 	"sync"
 
 	"github.com/gorilla/websocket"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 // Connection represents a user's WebSocket connection and state
 type Connection struct {
-	Username string
-	Socket   *websocket.Conn // WebSocket type
-	Board    string          // The board the user is currently in
+	Username string          `bson:"username"`
+	Socket   *websocket.Conn `bson:"-"` // WebSocket connections are not persisted
+	Board    string          `bson:"board"`
 }
 
 // BulletinBoard manages public and private boards
 type BulletinBoard struct {
-	Boards map[string][]*Connection // Key: board name, Value: list of connections
-	mutex  sync.Mutex               // Mutex for thread-safe operations
+	client *mongo.Client
+	db     *mongo.Database
+	boards *mongo.Collection
+	conns  map[string]*Connection // Map of username to Connection
+	mutex  sync.Mutex             // Mutex for connection management
 }
 
 // NewBulletinBoard creates a new instance of BulletinBoard
 func NewBulletinBoard() *BulletinBoard {
+	// Retrieve MongoDB URL from environment variables (provided by Docker), fallback to localhost
+	mongoURL := os.Getenv("MONGO_URL")
+	if mongoURL == "" {
+		mongoURL = "mongodb://localhost:27017" // Default to localhost for development
+	}
+
+	// Initialize MongoDB client
+	client, err := mongo.Connect(context.Background(), options.Client().ApplyURI(mongoURL))
+	if err != nil {
+		log.Fatalf("Failed to create MongoDB client: %v", err)
+	}
+
+	err = client.Ping(context.Background(), nil)
+	if err != nil {
+		log.Fatalf("Failed to connect to MongoDB: %v", err)
+	}
+
+	// Set up database and collection
+	db := client.Database("bulletin_board")
+	boards := db.Collection("boards")
+
 	return &BulletinBoard{
-		Boards: make(map[string][]*Connection),
+		client: client,
+		db:     db,
+		boards: boards,
+		conns:  make(map[string]*Connection),
 	}
 }
 
 // AddUser adds a user to a specific board
 func (bb *BulletinBoard) AddUser(boardName string, user *Connection) {
 	bb.mutex.Lock()
+	bb.conns[user.Username] = user
 	defer bb.mutex.Unlock()
 
-	bb.Boards[boardName] = append(bb.Boards[boardName], user)
+	// Insert the user into MongoDB under the board name
+	_, err := bb.boards.UpdateOne(
+		context.Background(),
+		bson.M{"board": boardName},
+		bson.M{"$push": bson.M{"users": bson.M{"username": user.Username, "board": user.Board}}},
+		options.Update().SetUpsert(true),
+	)
+
+	if err != nil {
+		log.Println("Error adding user:", err)
+	}
 }
 
 // RemoveUser removes a user from a specific board
 func (bb *BulletinBoard) RemoveUser(boardName string, user *Connection) {
 	bb.mutex.Lock()
+	delete(bb.conns, user.Username)
 	defer bb.mutex.Unlock()
 
-	if _, exists := bb.Boards[boardName]; exists {
-		for i, conn := range bb.Boards[boardName] {
-			if conn == user {
-				// Remove user from the slice
-				bb.Boards[boardName] = append(bb.Boards[boardName][:i], bb.Boards[boardName][i+1:]...)
-				break
-			}
-		}
+	// Remove the user from the MongoDB board
+	_, err := bb.boards.UpdateOne(
+		context.Background(),
+		bson.M{"board": boardName},
+		bson.M{"$pull": bson.M{"users": bson.M{"username": user.Username}}},
+	)
+
+	if err != nil {
+		log.Println("Error removing user:", err)
 	}
 }
 
@@ -57,9 +102,23 @@ func (bb *BulletinBoard) ListBoards() []string {
 	defer bb.mutex.Unlock()
 
 	var boardNames []string
-	for boardName := range bb.Boards {
-		boardNames = append(boardNames, boardName)
+	cursor, err := bb.boards.Find(context.Background(), bson.M{})
+	if err != nil {
+		log.Println("Error fetching boards:", err)
+		return boardNames
 	}
+	defer cursor.Close(context.Background())
+
+	for cursor.Next(context.Background()) {
+		var result bson.M
+		err := cursor.Decode(&result)
+		if err != nil {
+			log.Println("Error decoding board:", err)
+			continue
+		}
+		boardNames = append(boardNames, result["board"].(string))
+	}
+
 	return boardNames
 }
 
@@ -69,11 +128,20 @@ func (bb *BulletinBoard) ListUsers(boardName string) []string {
 	defer bb.mutex.Unlock()
 
 	var users []string
-	if _, exists := bb.Boards[boardName]; exists {
-		for _, conn := range bb.Boards[boardName] {
-			users = append(users, conn.Username)
-		}
+	var board struct {
+		Users []Connection `bson:"users"`
 	}
+
+	err := bb.boards.FindOne(context.Background(), bson.M{"board": boardName}).Decode(&board)
+	if err != nil {
+		log.Println("Error fetching users:", err)
+		return users
+	}
+
+	for _, conn := range board.Users {
+		users = append(users, conn.Username)
+	}
+
 	return users
 }
 
@@ -82,12 +150,26 @@ func (bb *BulletinBoard) BroadcastMessage(boardName string, message string) {
 	bb.mutex.Lock()
 	defer bb.mutex.Unlock()
 
-	if _, exists := bb.Boards[boardName]; exists {
-		for _, conn := range bb.Boards[boardName] {
-			// Send the message to the user's WebSocket
+	// Retrieve all users in the specified board
+	var board struct {
+		Users []struct {
+			Username string `bson:"username"`
+		} `bson:"users"`
+	}
+
+	err := bb.boards.FindOne(context.Background(), bson.M{"board": boardName}).Decode(&board)
+	if err != nil {
+		log.Println("Error fetching board users:", err)
+		return
+	}
+
+	// Broadcast the message to all active users
+	for _, user := range board.Users {
+		if conn, ok := bb.conns[user.Username]; ok {
+			// Send a message to the websockets
 			err := conn.Socket.WriteMessage(websocket.TextMessage, []byte(message))
 			if err != nil {
-				fmt.Println("Error sending message:", err)
+				log.Printf("Error sending message to %s: %v", user.Username, err)
 			}
 		}
 	}
@@ -98,15 +180,26 @@ func (bb *BulletinBoard) BroadcastMessageExcludingClient(boardName string, exclu
 	bb.mutex.Lock()
 	defer bb.mutex.Unlock()
 
-	if _, exists := bb.Boards[boardName]; exists {
-		for _, conn := range bb.Boards[boardName] {
-			// Only send the message if the connection is not the one we are excluding
-			if conn != excludeClient {
-				// Send the message to the user's WebSocket
-				err := conn.Socket.WriteMessage(websocket.TextMessage, []byte(message))
-				if err != nil {
-					fmt.Println("Error sending message:", err)
-				}
+	// Retrieve all users in the specified board
+	var board struct {
+		Users []struct {
+			Username string `bson:"username"`
+		} `bson:"users"`
+	}
+
+	err := bb.boards.FindOne(context.Background(), bson.M{"board": boardName}).Decode(&board)
+	if err != nil {
+		log.Println("Error fetching board users:", err)
+		return
+	}
+
+	// Broadcast the message excluding the client
+	for _, user := range board.Users {
+		if conn, ok := bb.conns[user.Username]; ok && conn.Username != excludeClient.Username {
+			// Send the message to the websockets
+			err := conn.Socket.WriteMessage(websocket.TextMessage, []byte(message))
+			if err != nil {
+				log.Printf("Error sending message to %s: %v", user.Username, err)
 			}
 		}
 	}
