@@ -19,6 +19,7 @@ const BulletinBoard: React.FC = () => {
       sx={{
         display: 'flex',
         flexDirection: 'column',
+        alignItems: 'center', // Center items horizontally
         gap: 2,
         maxWidth: '400px',
         width: '100%',
@@ -27,6 +28,12 @@ const BulletinBoard: React.FC = () => {
         mt: 4, // Add some vertical spacing
       }}
     >
+      {/* Centered image */}
+      <img 
+        src="/favicon.png" 
+        alt="BulletinHub Logo" 
+        style={{ width: '80px', height: '80px', marginBottom: '16px' }}
+      />
       <Typography variant="h4" component="h1" gutterBottom>
         BulletinHub
       </Typography>
